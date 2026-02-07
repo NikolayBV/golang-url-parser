@@ -1,0 +1,80 @@
+# Создать файл go_cheatsheet.md
+cat > go_cheatsheet.md << 'EOF'
+# Шпаргалка по Go (Golang) - Основы
+
+## Установка и запуск
+go version
+go run main.go
+go build main.go
+go get package-name
+
+## Структура программы
+package main
+import "fmt"
+func main() {
+    fmt.Println("Hello, World!")
+}
+
+## Переменные
+var name string = "John"
+age := 30
+const pi = 3.14159
+
+## Условные операторы
+if x > 10 {
+    fmt.Println("Больше 10")
+}
+
+switch grade {
+case "A": fmt.Println("Отлично")
+default: fmt.Println("Плохо")
+}
+
+## Циклы
+for i := 0; i < 5; i++ {}
+for x < 5 { x++ }
+for index, value := range slice {}
+
+## Функции
+func add(a, b int) int { return a + b }
+func divide(a, b float64) (float64, error) {}
+
+## Срезы
+slice := []int{1, 2, 3}
+slice = append(slice, 4)
+copy(dest, src)
+
+## Карты
+m := make(map[string]int)
+m["key"] = 42
+value, exists := m["key"]
+
+## Структуры
+type Person struct { Name string; Age int }
+p := Person{"John", 30}
+func (p Person) Method() {}
+
+## Интерфейсы
+type Shape interface { Area() float64 }
+type Circle struct { Radius float64 }
+func (c Circle) Area() float64 { return math.Pi * c.Radius * c.Radius }
+
+## Ошибки
+result, err := someFunction()
+if err != nil { log.Fatal(err) }
+err := fmt.Errorf("ошибка: %v", details)
+
+## Горутины
+go func() { /* параллельно */ }()
+ch := make(chan int)
+go func() { ch <- 42 }()
+value := <-ch
+
+## Полезные команды
+go test ./...
+go fmt ./...
+go vet ./...
+go mod init project-name
+EOF
+
+# Конвертировать в PDF через браузер или другие инструменты

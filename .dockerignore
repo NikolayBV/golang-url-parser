@@ -1,0 +1,19 @@
+# .dockerignore
+.git
+.gitignore
+*.log
+tmp/
+vendor/
+.env
+.idea/
+.vscode/
+*.swp
+*.swo
+__pycache__/
+*.pyc
+node_modules/
+dist/
+build/
+Dockerfile
+.dockerignore
+help.txt
