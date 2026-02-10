@@ -2,7 +2,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -10,10 +13,44 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/joho/godotenv"
 )
+
+// Config хранит конфигурацию из переменных окружения
+type Config struct {
+	Authorization string
+	OrgID         string
+}
+
+// PageResponse структура для ответа API
+type PageResponse struct {
+	ID       int    `json:"id"`
+	Slug     string `json:"slug"`
+	Title    string `json:"title"`
+	Content  string `json:"content"`
+	PageType string `json:"page_type"`
+}
+
+func init() {
+	// loads values from .env into the system
+	if err := godotenv.Load(); err != nil {
+		log.Print("No .env file found")
+	}
+}
 
 func main() {
 	showWelcomeMessage()
+
+	// Загружаем конфигурацию из переменных окружения
+	config := loadConfig()
+	if config.Authorization == "" {
+		fmt.Println("Внимание: переменная окружения API_AUTH_TOKEN не установлена")
+		fmt.Println("Для API запросов будет использоваться анонимный доступ")
+	}
+	if config.OrgID == "" {
+		fmt.Println("Внимание: переменная окружения API_ORG_ID не установлена")
+		fmt.Println("Для некоторых API запросов может потребоваться этот заголовок")
+	}
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -35,7 +72,7 @@ func main() {
 			continue
 		}
 
-		parseURL(validatedURL)
+		parseURL(validatedURL, config)
 
 		fmt.Println("\n" + strings.Repeat("-", 50) + "\n")
 	}
@@ -43,13 +80,31 @@ func main() {
 	fmt.Println("Программа завершена. До свидания!")
 }
 
+func loadConfig() Config {
+	apiAuthToken, existAuth := os.LookupEnv("API_AUTH_TOKEN")
+	apiOrgId, existOrg := os.LookupEnv("API_ORG_ID")
+
+	if !existAuth || !existOrg {
+		panic("variables not finded!")
+	}
+
+	return Config{
+		Authorization: apiAuthToken,
+		OrgID:         apiOrgId,
+	}
+}
+
 func showWelcomeMessage() {
-	fmt.Println("=== ПАРСЕР ВЕБ-СТРАНИЦ ===")
-	fmt.Println("Введите URL для парсинга")
+	fmt.Println("=== ПАРСЕР API И ВЕБ-СТРАНИЦ ===")
+	fmt.Println("Поддерживает API Wiki и обычные веб-страницы")
+	fmt.Println("Требуемые переменные окружения:")
+	fmt.Println("  API_AUTH_TOKEN - токен авторизации (Bearer token)")
+	fmt.Println("  API_ORG_ID     - идентификатор организации")
+	fmt.Println()
 	fmt.Println("Доступные команды:")
 	fmt.Println("  exit, quit - выход из программы")
 	fmt.Println("  help, ?    - справка")
-	fmt.Println(strings.Repeat("=", 30))
+	fmt.Println(strings.Repeat("=", 50))
 }
 
 func getInput(reader *bufio.Reader, prompt string) string {
@@ -89,16 +144,19 @@ func isHelpCommand(input string) bool {
 func showHelp() {
 	fmt.Println("\n=== СПРАВКА ===")
 	fmt.Println("Как использовать парсер:")
-	fmt.Println("1. Введите любой URL (например: https://example.com)")
-	fmt.Println("2. Программа покажет заголовок страницы и ссылки")
-	fmt.Println("3. Можно вводить URL без https:// - он добавится автоматически")
-	fmt.Println("4. Для выхода введите: exit, quit, q")
-	fmt.Println("5. Для повторного показа справки: help, ?")
-	fmt.Println("\nПримеры:")
+	fmt.Println("1. Введите URL API или обычной страницы")
+	fmt.Println("2. Для API URL должны начинаться с https://")
+	fmt.Println("3. Для обычных сайтов можно вводить без протокола")
+	fmt.Println("4. Переменные окружения загружаются автоматически")
+	fmt.Println("5. Для выхода введите: exit, quit, q")
+	fmt.Println("6. Для справки: help, ?")
+	fmt.Println("\nПримеры API URL:")
+	fmt.Println("  https://api.wiki.yandex.net/v1/pages?slug=...")
+	fmt.Println("  https://api.example.com/data")
+	fmt.Println("\nПримеры обычных URL:")
 	fmt.Println("  google.com")
 	fmt.Println("  https://github.com")
-	fmt.Println("  httpbin.org/html")
-	fmt.Println(strings.Repeat("-", 30))
+	fmt.Println(strings.Repeat("-", 50))
 }
 
 func validateURL(input string) string {
@@ -107,6 +165,15 @@ func validateURL(input string) string {
 		return ""
 	}
 
+	// Для API URL всегда требуется HTTPS
+	if strings.Contains(input, "api.") && !strings.HasPrefix(input, "http") {
+		fmt.Println("API URL требует протокол HTTPS")
+		input = "https://" + input
+		fmt.Println("Используем URL:", input)
+		return input
+	}
+
+	// Для обычных URL спрашиваем протокол
 	if !strings.HasPrefix(input, "http://") && !strings.HasPrefix(input, "https://") {
 		fmt.Print("Протокол не указан. Использовать https://? (y/n): ")
 
@@ -131,9 +198,9 @@ func validateURL(input string) string {
 	return input
 }
 
-func parseURL(url string) {
-	fmt.Printf("\nПарсим: %s\n", url)
-	fmt.Printf("Время: %s\n", time.Now().Format("15:04:05"))
+func parseURL(url string, config Config) {
+	fmt.Printf("\n🔍 Парсим: %s\n", url)
+	fmt.Printf("⏰ Время: %s\n", time.Now().Format("15:04:05"))
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -145,29 +212,167 @@ func parseURL(url string) {
 		return
 	}
 
+	// Устанавливаем заголовки из конфигурации
+	if config.Authorization != "" {
+		req.Header.Set("Authorization", "OAuth " + config.Authorization)
+		fmt.Println("✅ Используется Authorization заголовок")
+	}
+
+	if config.OrgID != "" {
+		req.Header.Set("X-Org-Id", config.OrgID)
+		fmt.Println("✅ Используется X-Org-Id заголовок")
+	}
+
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; MyParser/1.0)")
+	req.Header.Set("Accept", "application/json, text/html, */*")
 
 	startTime := time.Now()
 	resp, err := client.Do(req)
 	requestTime := time.Since(startTime)
 
 	if err != nil {
-		log.Println("Ошибка HTTP запроса:", err)
+		log.Println("❌ Ошибка HTTP запроса:", err)
 		return
 	}
 	defer resp.Body.Close()
 
-	fmt.Printf("Статус: %d %s\n", resp.StatusCode, resp.Status)
-	fmt.Printf("Время выполнения запроса: %v\n", requestTime)
-	fmt.Printf("Размер страницы: ~%d байт\n", resp.ContentLength)
+	fmt.Printf("📊 Статус: %d %s\n", resp.StatusCode, resp.Status)
+	fmt.Printf("⏱️  Время выполнения запроса: %v\n", requestTime)
+	fmt.Printf("📝 Content-Type: %s\n", resp.Header.Get("Content-Type"))
+	fmt.Printf("📦 Content-Length: %d байт\n", resp.ContentLength)
 
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	// Читаем весь ответ в буфер для многократного использования
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Println("Ошибка парсинга HTML:", err)
+		log.Println("❌ Ошибка чтения ответа:", err)
 		return
 	}
 
-	extractAndShowInfo(doc, url)
+	// Определяем тип контента
+	contentType := resp.Header.Get("Content-Type")
+
+	if strings.Contains(contentType, "application/json") {
+		parseJSONResponse(bodyBytes)
+	} else if strings.Contains(contentType, "text/html") {
+		parseHTMLResponse(bodyBytes, url)
+	} else {
+		parseGenericResponse(bodyBytes, contentType)
+	}
+}
+
+func parseJSONResponse(body []byte) {
+	fmt.Println("\n📋 Получен JSON ответ:")
+	fmt.Println(strings.Repeat("=", 60))
+
+	// Пробуем декодировать как PageResponse
+	var page PageResponse
+	if err := json.Unmarshal(body, &page); err == nil && page.ID != 0 {
+		// Успешно распарсили как PageResponse
+		displayPageResponse(page)
+		return
+	}
+
+	// Пробуем как generic JSON
+	displayGenericJSON(body)
+}
+
+func displayPageResponse(page PageResponse) {
+	fmt.Printf("🆔 ID: %d\n", page.ID)
+	fmt.Printf("🔗 Slug: %s\n", page.Slug)
+	fmt.Printf("📝 Заголовок: %s\n", page.Title)
+	fmt.Printf("📄 Тип страницы: %s\n", page.PageType)
+
+	if page.Content != "" {
+		fmt.Println("\n📖 Содержимое:")
+		fmt.Println(strings.Repeat("-", 60))
+		displayContent(page.Content)
+	}
+}
+
+func displayContent(content string) {
+	// Очищаем Markdown разметку для лучшего отображения
+	content = strings.ReplaceAll(content, "**", "")
+	content = strings.ReplaceAll(content, "#", "")
+	content = strings.ReplaceAll(content, "&nbsp;", " ")
+
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			fmt.Printf("%3d: %s\n", i+1, line)
+		}
+	}
+}
+
+func displayGenericJSON(body []byte) {
+	var data interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		fmt.Println("❌ Ошибка парсинга JSON:", err)
+		// Выводим сырой текст
+		fmt.Println("\n📄 Сырой ответ:")
+		fmt.Println(strings.Repeat("-", 60))
+		fmt.Println(string(body))
+		return
+	}
+
+	// Форматируем и выводим JSON
+	formatted, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		fmt.Println("❌ Ошибка форматирования JSON:", err)
+		fmt.Println(string(body))
+		return
+	}
+
+	// Ограничиваем вывод для больших JSON
+	output := string(formatted)
+	if len(output) > 2000 {
+		fmt.Println("📄 JSON (первые 2000 символов):")
+		output = output[:2000] + "\n... [вывод сокращен]"
+	} else {
+		fmt.Println("📄 JSON:")
+	}
+	fmt.Println(strings.Repeat("-", 60))
+	fmt.Println(output)
+
+	// Если это объект, показываем ключи
+	if obj, ok := data.(map[string]interface{}); ok {
+		fmt.Println("\n🔑 Доступные поля:")
+		for key := range obj {
+			fmt.Printf("  • %s\n", key)
+		}
+	}
+}
+
+func parseHTMLResponse(body []byte, baseURL string) {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		log.Println("❌ Ошибка парсинга HTML:", err)
+		return
+	}
+
+	fmt.Println("\n🌐 HTML страница:")
+	fmt.Println(strings.Repeat("=", 60))
+	extractAndShowInfo(doc, baseURL)
+}
+
+func parseGenericResponse(body []byte, contentType string) {
+	fmt.Printf("\n⚠️  Неизвестный тип контента: %s\n", contentType)
+	fmt.Println(strings.Repeat("-", 60))
+
+	// Ограничиваем вывод
+	content := string(body)
+	contentLength := len(content)
+
+	if contentLength > 1000 {
+		fmt.Printf("📄 Предпросмотр (первые 1000 из %d символов):\n", contentLength)
+		fmt.Println(strings.Repeat("-", 40))
+		fmt.Println(content[:1000])
+		fmt.Println("\n... [вывод сокращен]")
+	} else {
+		fmt.Println("📄 Содержимое:")
+		fmt.Println(strings.Repeat("-", 40))
+		fmt.Println(content)
+	}
 }
 
 func extractAndShowInfo(doc *goquery.Document, baseURL string) {
@@ -175,7 +380,7 @@ func extractAndShowInfo(doc *goquery.Document, baseURL string) {
 	if title == "" {
 		title = "(не найден)"
 	}
-	fmt.Printf("\n📄 Заголовок: %s\n\n", title)
+	fmt.Printf("📄 Заголовок: %s\n", title)
 
 	description := ""
 	doc.Find("meta[name='description']").Each(func(i int, s *goquery.Selection) {
@@ -184,26 +389,22 @@ func extractAndShowInfo(doc *goquery.Document, baseURL string) {
 		}
 	})
 	if description != "" {
-		fmt.Printf("📝 Описание: %s\n\n", truncateText(description, 100))
+		fmt.Printf("📝 Описание: %s\n", truncateText(description, 120))
 	}
 
-	h1Count := doc.Find("h1").Length()
-	h2Count := doc.Find("h2").Length()
-	fmt.Printf("📊 Структура: H1=%d, H2=%d\n\n", h1Count, h2Count)
-
-	fmt.Println("🔗 Ссылки на странице (первые 15):")
-	fmt.Println(strings.Repeat("-", 50))
+	fmt.Println("\n🔗 Ссылки на странице (первые 10):")
+	fmt.Println(strings.Repeat("-", 60))
 
 	linkCount := 0
 	doc.Find("a").Each(func(i int, s *goquery.Selection) {
-		if linkCount >= 15 {
+		if linkCount >= 10 {
 			return
 		}
 
 		text := strings.TrimSpace(s.Text())
 		href, exists := s.Attr("href")
 
-		if !exists || text == "" || len(text) > 100 {
+		if !exists || len(text) > 100 {
 			return
 		}
 
@@ -215,14 +416,14 @@ func extractAndShowInfo(doc *goquery.Document, baseURL string) {
 
 		text = cleanLinkText(text)
 		if text == "" {
-			return
+			text = "[без текста]"
 		}
 
 		fullURL := makeAbsoluteURL(href, baseURL)
 
 		displayURL := fullURL
-		if len(displayURL) > 60 {
-			displayURL = displayURL[:57] + "..."
+		if len(displayURL) > 50 {
+			displayURL = displayURL[:47] + "..."
 		}
 
 		fmt.Printf("%2d. %s\n", linkCount+1, text)
@@ -235,12 +436,19 @@ func extractAndShowInfo(doc *goquery.Document, baseURL string) {
 		fmt.Println("Ссылки не найдены")
 	}
 
-	fmt.Println(strings.Repeat("-", 50))
-	fmt.Printf("Всего найдено ссылок: %d\n", doc.Find("a").Length())
-
+	// Статистика
+	fmt.Println("\n📊 Статистика:")
+	h1Count := doc.Find("h1").Length()
+	h2Count := doc.Find("h2").Length()
 	paragraphs := doc.Find("p").Length()
 	images := doc.Find("img").Length()
-	fmt.Printf("\n📈 Статистика: параграфов=%d, изображений=%d\n", paragraphs, images)
+	links := doc.Find("a").Length()
+
+	fmt.Printf("  • Заголовки H1: %d\n", h1Count)
+	fmt.Printf("  • Заголовки H2: %d\n", h2Count)
+	fmt.Printf("  • Параграфы: %d\n", paragraphs)
+	fmt.Printf("  • Изображения: %d\n", images)
+	fmt.Printf("  • Всего ссылок: %d\n", links)
 }
 
 func truncateText(text string, maxLength int) string {
@@ -268,27 +476,30 @@ func makeAbsoluteURL(href, baseURL string) string {
 	}
 
 	if strings.HasPrefix(href, "/") {
-		if strings.HasPrefix(baseURL, "https://") {
-			domain := strings.TrimPrefix(baseURL, "https://")
-			if idx := strings.Index(domain, "/"); idx != -1 {
-				domain = domain[:idx]
+		base := baseURL
+		// Убираем путь из baseURL
+		if strings.HasPrefix(base, "https://") {
+			parts := strings.SplitN(base[8:], "/", 2)
+			if len(parts) > 1 {
+				return "https://" + parts[0] + href
 			}
-			return "https://" + domain + href
-		} else if strings.HasPrefix(baseURL, "http://") {
-			domain := strings.TrimPrefix(baseURL, "http://")
-			if idx := strings.Index(domain, "/"); idx != -1 {
-				domain = domain[:idx]
+			return "https://" + base[8:] + href
+		} else if strings.HasPrefix(base, "http://") {
+			parts := strings.SplitN(base[7:], "/", 2)
+			if len(parts) > 1 {
+				return "http://" + parts[0] + href
 			}
-			return "http://" + domain + href
+			return "http://" + base[7:] + href
 		}
 	}
 
+	// Относительные URL
 	if strings.HasSuffix(baseURL, "/") {
 		return baseURL + href
 	}
 
 	lastSlash := strings.LastIndex(baseURL, "/")
-	if lastSlash > 7 { // После протокола (https://)
+	if lastSlash >= 8 { // После протокола (https:// или http://)
 		return baseURL[:lastSlash+1] + href
 	}
 
